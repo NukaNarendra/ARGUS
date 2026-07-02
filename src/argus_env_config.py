@@ -10,12 +10,6 @@ logger = logging.getLogger(__name__)
 
 class Provider(Enum):
     NVIDIA = "nvidia"
-    GROQ = "groq"
-    MISTRAL = "mistral"
-    GEMINI = "gemini"
-    OPENAI = "openai"
-    OPENROUTER = "openrouter"
-    GITHUB = "github"
 
 
 @dataclass
@@ -35,24 +29,23 @@ class ModelTier(Enum):
 class ConfigManager:
     def __init__(self, mode: str = "dev"):
         self.mode = mode
+
         self.available_models = {
-            "nemotron_super": ModelConfig("nemotron_super", Provider.NVIDIA, "meta/llama-3.1-70b-instruct",
-                                          "NVIDIA_API_KEY"),
-            "groq_llama3": ModelConfig("groq_llama3", Provider.GROQ, "llama-3.3-70b-versatile", "GROQ_API_KEY"),
-            # Mapped to the massive 500K TPD limit model from your list
-            "groq_scorer": ModelConfig("groq_scorer", Provider.GROQ, "llama-3.1-8b-instant", "GROQ_API_KEY"),
-            "mistral_large": ModelConfig("mistral_large", Provider.MISTRAL, "mistral-large-latest", "MISTRAL_API_KEY"),
-            "gemini_flash": ModelConfig("gemini_flash", Provider.GEMINI, "gemini-2.5-flash", "GEMINI_API_KEY"),
-            "openai_gpt4o_mini": ModelConfig("openai_gpt4o_mini", Provider.OPENAI, "gpt-4o-mini", "OPENAI_API_KEY"),
-            "openrouter_free": ModelConfig("openrouter_free", Provider.OPENROUTER, "google/gemini-2.0-flash-exp:free",
-                                           "OPENROUTER_API_KEY"),
-            "github_gpt4o_mini": ModelConfig("github_gpt4o_mini", Provider.GITHUB, "gpt-4o-mini", "GITHUB_TOKEN")
+            "nemotron": ModelConfig("nemotron", Provider.NVIDIA, "nvidia/nemotron-3-super-120b-a12b",
+                                    "NVIDIA_API_KEY_NEMOTRON"),
+            "llama": ModelConfig("llama", Provider.NVIDIA, "meta/llama-3.3-70b-instruct", "NVIDIA_API_KEY_LLAMA"),
+            "qwen": ModelConfig("qwen", Provider.NVIDIA, "qwen/qwen3-next-80b-a3b-instruct", "NVIDIA_API_KEY_QWEN"),
+            "glm": ModelConfig("glm", Provider.NVIDIA, "z.ai/glm-5.1", "NVIDIA_API_KEY_GLM"),
+            "deepseek": ModelConfig("deepseek", Provider.NVIDIA, "deepseek-ai/deepseek-v4-flash",
+                                    "NVIDIA_API_KEY_DEEPSEEK"),
+            "minimax": ModelConfig("minimax", Provider.NVIDIA, "minimaxai/minimax-m2.7", "NVIDIA_API_KEY_MINIMAX"),
+            "scorer": ModelConfig("scorer", Provider.NVIDIA, "meta/llama-3.1-8b-instruct", "NVIDIA_API_KEY_SCORER"),
         }
 
         self.tier_mapping = {
-            ModelTier.LEAD_AGENT: {"dev": "nemotron_super", "prod": "github_gpt4o_mini"},
-            ModelTier.SUBAGENT: {"dev": "groq_llama3", "prod": "openrouter_free"},
-            ModelTier.SCORER: {"dev": "groq_scorer", "prod": "groq_scorer"}
+            ModelTier.LEAD_AGENT: {"dev": "nemotron", "prod": "llama"},
+            ModelTier.SUBAGENT: {"dev": "qwen", "prod": "glm"},
+            ModelTier.SCORER: {"dev": "scorer", "prod": "scorer"}
         }
 
     def get_model_config(self, tier: ModelTier) -> ModelConfig:
@@ -82,45 +75,25 @@ class MultiModelClient:
     tuple[str, str, Any]:
         for attempt in range(max_attempts):
             try:
-                if config.provider == Provider.GEMINI:
-                    from openai import OpenAI
-                    client = OpenAI(api_key=api_key,
-                                    base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
-                    return self._process_openai_compatible(client, kwargs)
-                elif config.provider in [Provider.OPENAI, Provider.GITHUB, Provider.OPENROUTER, Provider.GROQ,
-                                         Provider.NVIDIA, Provider.MISTRAL]:
-                    from openai import OpenAI
-                    base_url = None
-                    if config.provider == Provider.GROQ:
-                        base_url = "https://api.groq.com/openai/v1"
-                    elif config.provider == Provider.NVIDIA:
-                        base_url = "https://integrate.api.nvidia.com/v1"
-                    elif config.provider == Provider.OPENROUTER:
-                        base_url = "https://openrouter.ai/api/v1"
-                    elif config.provider == Provider.GITHUB:
-                        base_url = "https://models.inference.ai.azure.com"
-                    elif config.provider == Provider.MISTRAL:
-                        base_url = "https://api.mistral.ai/v1"
+                from openai import OpenAI
+                client = OpenAI(api_key=api_key, base_url="https://integrate.api.nvidia.com/v1")
 
-                    client = OpenAI(api_key=api_key, base_url=base_url)
-                    return self._process_openai_compatible(client, kwargs)
+                response = client.chat.completions.create(**kwargs)
+                message = response.choices[0].message
+                content = message.content or ""
+                reasoning = ""
+
+                tool_calls = message.tool_calls if hasattr(message, 'tool_calls') else None
+                if not tool_calls and hasattr(message, 'function_call') and message.function_call:
+                    tool_calls = [message.function_call]
+
+                return content, reasoning, tool_calls
+
             except Exception as e:
                 logger.warning(f"Attempt {attempt + 1} failed for {config.alias}: {str(e)}")
                 if attempt == max_attempts - 1:
                     raise RuntimeError(f"Execution failed after {max_attempts} attempts. Error: {str(e)}")
 
-                sleep_time = 15 * (attempt + 1)
+                sleep_time = 10 * (attempt + 1)
                 logger.info(f"Rate limit or network error hit. Sleeping for {sleep_time} seconds before retrying...")
                 time.sleep(sleep_time)
-
-    def _process_openai_compatible(self, client, kwargs):
-        response = client.chat.completions.create(**kwargs)
-        message = response.choices[0].message
-        content = message.content or ""
-        reasoning = ""
-
-        tool_calls = message.tool_calls if hasattr(message, 'tool_calls') else None
-        if not tool_calls and hasattr(message, 'function_call') and message.function_call:
-            tool_calls = [message.function_call]
-
-        return content, reasoning, tool_calls

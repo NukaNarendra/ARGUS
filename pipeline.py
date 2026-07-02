@@ -16,7 +16,7 @@ from src.hardening.constitutional_guard import ConstitutionalGuard
 from src.hardening.pap import PrincipalAuthenticationProtocol
 from src.hardening.structural_math_guard import StructuralMathGuard
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(BASE_DIR, "analysis", "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 LOG_FILE = os.path.join(LOG_DIR, "argus_pipeline.log")
