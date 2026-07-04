@@ -1,0 +1,20 @@
+{
+    "constitutional_guard": {
+        "total_inspections": 60,
+        "redactions_applied": 55,
+        "failures": 5,
+        "success_rate": 91.66666666666666
+    },
+    "pap_protocol": {
+        "payloads_signed": 0,
+        "signatures_verified": 0,
+        "verification_failures": 0,
+        "replay_attacks_blocked": 0
+    },
+    "structural_math_guard": {
+        "payloads_analyzed": 60,
+        "entropy_blocks": 0,
+        "depth_blocks": 0,
+        "compression_blocks": 0
+    }
+}

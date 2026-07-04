@@ -7,10 +7,8 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
-
 class Provider(Enum):
     NVIDIA = "nvidia"
-
 
 @dataclass
 class ModelConfig:
@@ -19,32 +17,28 @@ class ModelConfig:
     model_name: str
     api_key_env: str
 
-
 class ModelTier(Enum):
     LEAD_AGENT = "lead_agent"
     SUBAGENT = "subagent"
     SCORER = "scorer"
-
 
 class ConfigManager:
     def __init__(self, mode: str = "dev"):
         self.mode = mode
 
         self.available_models = {
-            "nemotron": ModelConfig("nemotron", Provider.NVIDIA, "nvidia/nemotron-3-super-120b-a12b",
-                                    "NVIDIA_API_KEY_NEMOTRON"),
+            "nemotron": ModelConfig("nemotron", Provider.NVIDIA, "nvidia/nemotron-3-super-120b-a12b", "NVIDIA_API_KEY_NEMOTRON"),
             "llama": ModelConfig("llama", Provider.NVIDIA, "meta/llama-3.3-70b-instruct", "NVIDIA_API_KEY_LLAMA"),
             "qwen": ModelConfig("qwen", Provider.NVIDIA, "qwen/qwen3-next-80b-a3b-instruct", "NVIDIA_API_KEY_QWEN"),
-            "glm": ModelConfig("glm", Provider.NVIDIA, "z.ai/glm-5.1", "NVIDIA_API_KEY_GLM"),
-            "deepseek": ModelConfig("deepseek", Provider.NVIDIA, "deepseek-ai/deepseek-v4-flash",
-                                    "NVIDIA_API_KEY_DEEPSEEK"),
+            "gpt_oss": ModelConfig("gpt_oss", Provider.NVIDIA, "openai/gpt-oss-120b", "NVIDIA_API_KEY_GPT_OSS"),
+            "deepseek": ModelConfig("deepseek", Provider.NVIDIA, "deepseek-ai/deepseek-v4-flash", "NVIDIA_API_KEY_DEEPSEEK"),
             "minimax": ModelConfig("minimax", Provider.NVIDIA, "minimaxai/minimax-m2.7", "NVIDIA_API_KEY_MINIMAX"),
             "scorer": ModelConfig("scorer", Provider.NVIDIA, "meta/llama-3.1-8b-instruct", "NVIDIA_API_KEY_SCORER"),
         }
 
         self.tier_mapping = {
             ModelTier.LEAD_AGENT: {"dev": "nemotron", "prod": "llama"},
-            ModelTier.SUBAGENT: {"dev": "qwen", "prod": "glm"},
+            ModelTier.SUBAGENT: {"dev": "qwen", "prod": "gpt_oss"},
             ModelTier.SCORER: {"dev": "scorer", "prod": "scorer"}
         }
 
@@ -52,31 +46,39 @@ class ConfigManager:
         alias = self.tier_mapping[tier][self.mode]
         return self.available_models[alias]
 
-
 class MultiModelClient:
     def __init__(self, config_manager: ConfigManager):
         self.config_manager = config_manager
 
-    def execute_chat_completion(self, role: ModelTier, messages: List[Dict[str, Any]],
-                                tools: Optional[List[Dict[str, Any]]] = None) -> tuple[str, str, Any]:
+    def execute_chat_completion(self, role: ModelTier, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None) -> tuple[str, str, Any]:
         config = self.config_manager.get_model_config(role)
         api_key = os.environ.get(config.api_key_env, "").strip()
 
         if not api_key:
             raise ValueError(f"API Key missing for {config.alias}. Set {config.api_key_env} in your .env file.")
 
-        kwargs = {"model": config.model_name, "messages": messages}
+        kwargs = {
+            "model": config.model_name,
+            "messages": messages,
+            "temperature": 1.0,
+            "top_p": 1.0,
+            "max_tokens": 4096
+        }
+
         if tools:
             kwargs["tools"] = tools
 
         return self._execute_with_retries(api_key, kwargs, config)
 
-    def _execute_with_retries(self, api_key: str, kwargs: Dict[str, Any], config: ModelConfig, max_attempts: int = 5) -> \
-    tuple[str, str, Any]:
+    def _execute_with_retries(self, api_key: str, kwargs: Dict[str, Any], config: ModelConfig, max_attempts: int = 2) -> tuple[str, str, Any]:
         for attempt in range(max_attempts):
             try:
                 from openai import OpenAI
-                client = OpenAI(api_key=api_key, base_url="https://integrate.api.nvidia.com/v1")
+                client = OpenAI(
+                    api_key=api_key,
+                    base_url="https://integrate.api.nvidia.com/v1",
+                    timeout=15.0
+                )
 
                 response = client.chat.completions.create(**kwargs)
                 message = response.choices[0].message
@@ -94,6 +96,6 @@ class MultiModelClient:
                 if attempt == max_attempts - 1:
                     raise RuntimeError(f"Execution failed after {max_attempts} attempts. Error: {str(e)}")
 
-                sleep_time = 10 * (attempt + 1)
+                sleep_time = 5
                 logger.info(f"Rate limit or network error hit. Sleeping for {sleep_time} seconds before retrying...")
                 time.sleep(sleep_time)
